@@ -28,6 +28,11 @@ def _():
 
 @app.cell
 def _(av, cv2, np, tqdm, video_path):
+    """
+    Berechnet die durchschnittliche Helligkeit eines Frames nach der Formel der Luminanz und speichert die Werte in einer Liste.
+
+    """
+
     brightness_val = []
 
     with av.open(video_path) as f:
@@ -41,17 +46,16 @@ def _(av, cv2, np, tqdm, video_path):
             if next_s >= last_s:
                 pixels = frame.to_ndarray(format="rgb24")
 
-                # Mean color for each frame
+                # Mittlerer Farbwert für jeden Frame
                 mean_r = np.mean(pixels[:, :, 0])
                 mean_g = np.mean(pixels[:, :, 1])
                 mean_b = np.mean(pixels[:, :, 2])
 
+                # Luminanz pro Frame
                 brightness_val.append((0.2126 * mean_r +
                                    0.7152 * mean_g + 0.0722 * mean_b) / 255.0)
 
             last_s = next_s
-
-    print(brightness_val)
     return (
         brightness_val,
         cap,
@@ -70,34 +74,35 @@ def _(av, cv2, np, tqdm, video_path):
     )
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(fft, frame_rate, np):
-    def detect_epilepsy_risk(brightness_val, frame_rate=frame_rate, window_size=12, threshold_percentile=95, min_flash_duration=0.5):
-        """
-        Detects high-risk rapid brightness changes and flashing sequences that could trigger epilepsy.
+    """
+    Untersucht auf schnell aufeinanderfolgende Helligkeitsunterschiede und blinkende Lichter, die photosensitive Epilepsie auslösen könnten.
     
-        Parameters:
-            brightness_vals (list or np.array): List of brightness values over time.
-            frame_rate (int): Frames per second of the video (default 60 FPS).
-            window_size (int): Size of the rolling window for detecting rapid changes.
-            threshold_percentile (int): Percentile for defining extreme changes.
-            min_flash_duration (float): Minimum duration (in seconds) for high-risk intervals.
+    Parameter:
+        brightness_val: Liste der errechneten durchschnittlichen Helligkeit pro Frame
+        window_size (int): Größe des Fensters, um schnelle Änderungen zu erkennen
+        threshold_percent (int): Prozentangabe, welche die Extremität der zu erkennenden Helligkeitsunterschiede bestimmt
+        min_duration (float): Minimale Länge eines risikoreichen Intervalls (in Sekunden)
     
-        Returns:
-            dict: Contains rapid change intervals and frequency analysis results.
-        """
+    Returns:
+        "rapid_change_intervals": Intervalle, in denen schnelle & aufeinanderfolgende Änderungen der Helligkeit auftreten
+        "high_risk_frequencies" (bool): Result der Frequenzanalyse mittels FFT, ob risikoreiche Frequenz enthalten ist 
+    """
+
+    def detect_epilepsy_risk(brightness_val, frame_rate=frame_rate, window_size=12, threshold_percent=95, min_duration=0.5):
+
         brightness = np.array(brightness_val)
         brightness_diff = np.abs(np.diff(brightness))
-    
-        # Apply a rolling sum of brightness differences
+
         rolling_diff = np.convolve(brightness_diff, np.ones(window_size), mode='valid')
-        threshold = np.percentile(rolling_diff, threshold_percentile)
+        threshold = np.percentile(rolling_diff, threshold_percent)
     
-        # Find frames with rapid brightness changes
+        # Frames mit schnell aufeinanderfolgenden Helligkeitsänderungen finden
         rapid_changes = np.where(rolling_diff > threshold)[0]
     
-        # Group consecutive rapid changes
-        min_duration_frames = int(frame_rate * min_flash_duration)
+        # Gruppieren von aufeinanderfolgenden gefundenen Sequenzen
+        min_duration_frames = int(frame_rate * min_duration)
         intervals = []
         if len(rapid_changes) > 0:
             start = rapid_changes[0]
@@ -107,33 +112,32 @@ def _(fft, frame_rate, np):
                     start = rapid_changes[j]
             intervals.append((start, rapid_changes[-1]))
     
-        # Frequency analysis using FFT
+        # Frequenzanalyse mittels Fouriertransformation
         fft_vals = np.abs(fft(brightness))
         freqs = np.fft.fftfreq(len(brightness), d=1/frame_rate)
         risky_freqs = (freqs >= 3) & (freqs <= 30)
-        high_risk_frequencies = np.any(fft_vals[risky_freqs] > np.percentile(fft_vals, threshold_percentile))
-
-        print(intervals)
-        print(high_risk_frequencies)
+        high_risk_frequencies = np.any(fft_vals[risky_freqs] > np.percentile(fft_vals, threshold_percent))
     
         return {
             "rapid_change_intervals": intervals,
-            "high_risk_frequencies_detected": high_risk_frequencies
+            "high_risk_frequencies": high_risk_frequencies
         }
     return (detect_epilepsy_risk,)
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(brightness_val, detect_epilepsy_risk):
     results = detect_epilepsy_risk(brightness_val)
     intervals = results["rapid_change_intervals"]
-    frequencies = results["high_risk_frequencies_detected"]
+    frequencies = results["high_risk_frequencies"]
     return frequencies, intervals, results
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(brightness_val, frame_rate, np):
-    # format time in mm:ss
+    """
+    Hilfsfunktion um Zeit zu formatieren
+    """
     time_axis_minutes = np.arange(len(brightness_val)) / frame_rate / 60
     
     def format_time(x, pos):
@@ -143,7 +147,7 @@ def _(brightness_val, frame_rate, np):
     return format_time, time_axis_minutes
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(
     brightness_val,
     format_time,
@@ -156,35 +160,40 @@ def _(
 ):
     plt.figure(figsize=(10, 4))
     gs = gridspec.GridSpec(2, 1, height_ratios=[0.85, 0.15])
-    
-    # Brightness plot
+
+
+    """Helligkeitsgraph"""
+
     plt.subplot(gs[0])
     plt.plot(time_axis_minutes, brightness_val, color='blue')
     plt.title('Average Brightness of Video Frames')
     plt.xlabel('Time')
     plt.ylabel('Brightness')
     
-    # Filtered trigger intervals
+    # Filtert gefundene Intervalle in "high-risk" (rot) und "lower-risk" (orange) ein, abhängig von der Länge des Intervalls (2 Sekunden)
     for start, end in intervals:
-        duration = (end - start) / frame_rate  # in seconds
-        if duration >= 2:  # 2 seconds threshold
+        duration = (end - start) / frame_rate
+        if duration >= 2:
             plt.axvspan(start / frame_rate / 60, end / frame_rate / 60, color='red', alpha=0.3)
         else:
             plt.axvspan(start / frame_rate / 60, end / frame_rate / 60, color='orange', alpha=0.3)
     
     plt.gca().xaxis.set_major_formatter(plt.FuncFormatter(format_time))
-    plt.gca().xaxis.set_major_locator(plt.MultipleLocator(0.25))  # major ticks every 15 seconds
+    plt.gca().xaxis.set_major_locator(plt.MultipleLocator(0.25))
     plt.grid(True, which='both', axis='x', linestyle='--', linewidth=0.5)
-    
-    # Barcode plot
+
+
+    """Barcode"""
+
     plt.subplot(gs[1])
     plt.imshow([brightness_val], aspect='auto', cmap='gray', extent=[0, len(brightness_val) / frame_rate / 60, 0, 1])
     plt.title('Barcode Representation of Brightness')
     plt.xlabel('Time')
     plt.yticks([])
-    
+
+    # Filtert gefundene Intervalle in "high-risk" (rot) und "lower-risk" (orange) ein, abhängig von der Länge des Intervalls (2 Sekunden)
     for start, end in intervals:
-        duration = (end - start) / frame_rate  # in seconds
+        duration = (end - start) / frame_rate
         if duration >= 2:
             plt.axvspan(start / frame_rate / 60, end / frame_rate / 60, color='red', alpha=0.5)
         else:
@@ -200,9 +209,6 @@ def _(
 
     plt.tight_layout()
     plt.show()
-
-
-
     return duration, end, gs, start
 
 
