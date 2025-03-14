@@ -22,7 +22,7 @@ def _():
 
 @app.cell
 def _():
-    video_path = "input/WALL-ETrailer.webm"
+    video_path = "input/DuneTrailer.webm"
     return (video_path,)
 
 
@@ -74,17 +74,17 @@ def _(av, cv2, np, tqdm, video_path):
     )
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(fft, frame_rate, np):
     """
     Untersucht auf schnell aufeinanderfolgende Helligkeitsunterschiede und blinkende Lichter, die photosensitive Epilepsie auslösen könnten.
-    
+
     Parameter:
         brightness_val: Liste der errechneten durchschnittlichen Helligkeit pro Frame
         window_size (int): Größe des Fensters, um schnelle Änderungen zu erkennen
         threshold_percent (int): Prozentangabe, welche die Extremität der zu erkennenden Helligkeitsunterschiede bestimmt
         min_duration (float): Minimale Länge eines risikoreichen Intervalls (in Sekunden)
-    
+
     Returns:
         "rapid_change_intervals": Intervalle, in denen schnelle & aufeinanderfolgende Änderungen der Helligkeit auftreten
         "high_risk_frequencies" (bool): Result der Frequenzanalyse mittels FFT, ob risikoreiche Frequenz enthalten ist 
@@ -97,10 +97,10 @@ def _(fft, frame_rate, np):
 
         rolling_diff = np.convolve(brightness_diff, np.ones(window_size), mode='valid')
         threshold = np.percentile(rolling_diff, threshold_percent)
-    
+
         # Frames mit schnell aufeinanderfolgenden Helligkeitsänderungen finden
         rapid_changes = np.where(rolling_diff > threshold)[0]
-    
+
         # Gruppieren von aufeinanderfolgenden gefundenen Sequenzen
         min_duration_frames = int(frame_rate * min_duration)
         intervals = []
@@ -111,35 +111,52 @@ def _(fft, frame_rate, np):
                     intervals.append((start, rapid_changes[j - 1]))
                     start = rapid_changes[j]
             intervals.append((start, rapid_changes[-1]))
-    
+
+        total_interval_duration = sum((end - start) / frame_rate for start, end in intervals)
+
+        total_video_duration = len(brightness) / frame_rate
+        percentage_rapid_changes = (total_interval_duration / total_video_duration) * 100 if total_video_duration > 0 else 0
+
         # Frequenzanalyse mittels Fouriertransformation
         fft_vals = np.abs(fft(brightness))
         freqs = np.fft.fftfreq(len(brightness), d=1/frame_rate)
         risky_freqs = (freqs >= 3) & (freqs <= 30)
         high_risk_frequencies = np.any(fft_vals[risky_freqs] > np.percentile(fft_vals, threshold_percent))
-    
+
         return {
             "rapid_change_intervals": intervals,
+            "total_interval_duration": total_interval_duration,
+            "percentage_rapid_changes": percentage_rapid_changes,
             "high_risk_frequencies": high_risk_frequencies
         }
     return (detect_epilepsy_risk,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(brightness_val, detect_epilepsy_risk):
     results = detect_epilepsy_risk(brightness_val)
     intervals = results["rapid_change_intervals"]
     frequencies = results["high_risk_frequencies"]
-    return frequencies, intervals, results
+    num_intervals = len(intervals)
+    total_interval_duration = results["total_interval_duration"]
+    percentage_rapid_changes = results["percentage_rapid_changes"]
+    return (
+        frequencies,
+        intervals,
+        num_intervals,
+        percentage_rapid_changes,
+        results,
+        total_interval_duration,
+    )
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(brightness_val, frame_rate, np):
     """
     Hilfsfunktion um Zeit zu formatieren
     """
     time_axis_minutes = np.arange(len(brightness_val)) / frame_rate / 60
-    
+
     def format_time(x, pos):
         minutes = int(x)
         seconds = int((x - minutes) * 60)
@@ -147,7 +164,7 @@ def _(brightness_val, frame_rate, np):
     return format_time, time_axis_minutes
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
     brightness_val,
     format_time,
@@ -155,8 +172,11 @@ def _(
     frequencies,
     gridspec,
     intervals,
+    num_intervals,
+    percentage_rapid_changes,
     plt,
     time_axis_minutes,
+    total_interval_duration,
 ):
     plt.figure(figsize=(10, 4))
     gs = gridspec.GridSpec(2, 1, height_ratios=[0.85, 0.15])
@@ -169,7 +189,7 @@ def _(
     plt.title('Average Brightness of Video Frames')
     plt.xlabel('Time')
     plt.ylabel('Brightness')
-    
+
     # Filtert gefundene Intervalle in "high-risk" (rot) und "lower-risk" (orange) ein, abhängig von der Länge des Intervalls (2 Sekunden)
     for start, end in intervals:
         duration = (end - start) / frame_rate
@@ -177,7 +197,7 @@ def _(
             plt.axvspan(start / frame_rate / 60, end / frame_rate / 60, color='red', alpha=0.3)
         else:
             plt.axvspan(start / frame_rate / 60, end / frame_rate / 60, color='orange', alpha=0.3)
-    
+
     plt.gca().xaxis.set_major_formatter(plt.FuncFormatter(format_time))
     plt.gca().xaxis.set_major_locator(plt.MultipleLocator(0.25))
     plt.grid(True, which='both', axis='x', linestyle='--', linewidth=0.5)
@@ -198,7 +218,7 @@ def _(
             plt.axvspan(start / frame_rate / 60, end / frame_rate / 60, color='red', alpha=0.5)
         else:
             plt.axvspan(start / frame_rate / 60, end / frame_rate / 60, color='orange', alpha=0.5)
-    
+
     plt.gca().xaxis.set_major_formatter(plt.FuncFormatter(format_time))
     plt.gca().xaxis.set_major_locator(plt.MultipleLocator(0.25))
 
@@ -206,9 +226,14 @@ def _(
         plt.figtext(0.5, -0.1, "High risk frequencies detected.", ha="center", fontsize=12)
     else:
         plt.figtext(0.5, -0.1, "No high risk frequencies detected.", ha="center", fontsize=12)
+    
 
     plt.tight_layout()
     plt.show()
+
+    print(f"Number of potentially risky intervals: {num_intervals}")
+    print(f"Total runtime of risky intervals: {total_interval_duration:.2f} seconds")
+    print(f"Percentage of runtime: {percentage_rapid_changes:.2f}%")
     return duration, end, gs, start
 
 
