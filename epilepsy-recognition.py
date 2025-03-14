@@ -22,11 +22,11 @@ def _():
 
 @app.cell
 def _():
-    video_path = "input/WildAtHeartTrailer.mp4"
+    video_path = "input/WALL-ETrailer.webm"
     return (video_path,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(av, cv2, np, tqdm, video_path):
     """
     Berechnet die durchschnittliche Helligkeit eines Frames nach der Formel der Luminanz und speichert die Werte in einer Liste.
